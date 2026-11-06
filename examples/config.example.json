@@ -1,0 +1,1 @@
+{"credentials":{"github":{"file":"~/.secrets/github-token"},"openai":{"env":"OPENAI_API_KEY"}},"routes":[{"credential":"openai","name":"openai","upstream":"https://api.openai.com"},{"credential":"github","name":"github","template":"token {secret}","upstream":"https://api.github.com"}]}
