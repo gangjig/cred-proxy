@@ -141,36 +141,20 @@ AI digest, 2026-11-06).
 This repository is small enough to regenerate from a prompt. Paste the
 following into an LLM and it should produce a closely similar project:
 
-> Write a Python 3.10+ command-line tool called "cred-proxy", standard
-> library only, with a src layout, pyproject.toml, MIT license, README, and
-> a pytest suite. Purpose: a local HTTP egress proxy that keeps real API
-> credentials out of an AI agent's context. Behavior: (1) A JSON config
-> declares credentials, each resolved from an environment variable or a
-> file, and routes, each fixing an upstream base URL, one credential, an
-> auth header name (default "Authorization"), and a header template
-> containing "{secret}" (default "Bearer {secret}"); invalid configs
-> (duplicate route names, undeclared credentials, templates without
-> "{secret}", non-http(s) upstreams, credentials with both or neither of
-> env/file) are rejected with clear errors. (2) The agent calls
-> http://127.0.0.1:<port>/<route>/<path> with the header value
-> "proxy:<credential-name>" as a placeholder; the proxy refuses undeclared
-> routes and mismatched placeholders with HTTP 403 without contacting the
-> upstream, otherwise swaps in the real credential rendered through the
-> template and forwards method, path, query, headers, and body to the
-> upstream. (3) The real secret is redacted (replaced with
-> "***REDACTED***") from response bodies and headers before returning them.
-> (4) An audit log (in memory and optional JSONL file) records time, route,
-> method, path, credential name, status, and result — never secret values.
-> (5) The server binds 127.0.0.1 by default and refuses non-loopback binds
-> unless an explicit allow-remote flag is passed; startup fails fast if a
-> declared credential cannot be resolved. CLI subcommands: "check"
-> (validate a config, print resolvable credentials masked and the declared
-> routes), "serve" (run the proxy), and "demo" (spin up a throwaway echo
-> upstream plus the proxy and print a three-step demonstration: swap-in,
-> redaction, refusal). Tests must cover config validation, secret
-> resolution and redaction, and live proxy behavior (swap, redaction in
-> body and headers, refusals without upstream calls, path/query/body
-> forwarding, status passthrough, audit log contents).
+> Write a small Python command-line tool, standard library only, that
+> runs a local HTTP egress proxy so an AI agent can call APIs without
+> ever seeing the real credentials. A JSON config declares the
+> credentials (each resolved from an environment variable or a file) and
+> the routes they may be used on, each route fixing an upstream, one
+> credential, and a header template. The agent calls the proxy with a
+> harmless placeholder header value; the proxy swaps in the real
+> credential only for declared routes, refuses anything undeclared
+> without contacting the upstream, scrubs the real secret out of
+> responses before returning them, and keeps an audit log that records
+> what was called but never any secret values. The proxy binds to
+> localhost unless explicitly told otherwise, and the CLI can validate a
+> config, run the proxy, or demonstrate the credential swap, the
+> redaction, and the refusal against a throwaway local upstream.
 
 ## License
 
