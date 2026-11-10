@@ -107,7 +107,12 @@ What this does:
   else: undeclared routes and mismatched placeholders are refused before
   any upstream call.
 - Redacts the exact secret string from upstream responses, so an upstream
-  that echoes your key cannot hand it to the agent.
+  that echoes your key cannot hand it to the agent. The agent's
+  `Accept-Encoding` is never forwarded, and an encoded (gzip/deflate)
+  response is decoded before redaction and relayed as identity — a
+  secret hidden inside compression cannot slip past the byte match.
+  A response in an encoding the proxy cannot decode (e.g. Brotli) is
+  refused with a 502 rather than relayed uninspected.
 - Binds to 127.0.0.1 by default and refuses a non-loopback bind unless you
   pass `--allow-remote`.
 
@@ -118,6 +123,9 @@ What this does not do:
   upstream, one credential per route, and prefer scoped/read-only keys.
 - Redaction matches the exact secret string; it is not a general DLP
   filter.
+- Request and response bodies are read (and, when encoded, decompressed)
+  fully in memory; there is no size cap yet, so a hostile or broken
+  upstream can make the proxy allocate a lot of memory.
 - It is an HTTP proxy for APIs that take header credentials, not a TLS
   MITM and not a sandbox.
 

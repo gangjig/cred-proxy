@@ -10,9 +10,11 @@ secret is redacted out of anything the upstream sends back.
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import threading
+import zlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -62,6 +64,42 @@ class AuditLog:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _decode_body(body: bytes, content_encoding: str | None) -> bytes | None:
+    """Undo a response's Content-Encoding so the body can be redacted.
+
+    Redaction is an exact byte match, so it only works on the plain
+    body: a secret inside a gzip-compressed response would sail past
+    it and the agent would recover it by decompressing. Returns the
+    decoded body (the input unchanged when there is no encoding), or
+    None when the encoding chain uses a coding this proxy cannot
+    decode (for example ``br``) or the bytes do not decode — such a
+    body cannot be checked for leaked secrets and must not be relayed.
+    An empty body decodes to itself: it cannot contain a secret, and
+    HEAD/204/304 responses carry a Content-Encoding describing a body
+    they do not have.
+    """
+    if not body or not content_encoding:
+        return body
+    codings = [c.strip().lower() for c in content_encoding.split(",") if c.strip()]
+    out = body
+    for coding in reversed(codings):  # codings are listed in applied order
+        if coding == "identity":
+            continue
+        try:
+            if coding == "gzip":
+                out = gzip.decompress(out)
+            elif coding == "deflate":
+                try:
+                    out = zlib.decompress(out)
+                except zlib.error:
+                    out = zlib.decompress(out, -zlib.MAX_WBITS)  # raw deflate
+            else:
+                return None
+        except (OSError, EOFError, zlib.error):
+            return None
+    return out
 
 
 class ProxyServer(ThreadingHTTPServer):
@@ -123,6 +161,11 @@ class _Handler(BaseHTTPRequestHandler):
             lk = key.lower()
             if lk in HOP_BY_HOP or lk in ("host", "content-length"):
                 continue
+            if lk == "accept-encoding":
+                # Never let the agent negotiate a compressed response:
+                # redaction runs on the plain body (see _decode_body).
+                # http.client adds "Accept-Encoding: identity" itself.
+                continue
             if lk == route.header.lower():
                 continue  # replaced below with the real credential
             headers[key] = value
@@ -147,12 +190,29 @@ class _Handler(BaseHTTPRequestHandler):
             conn.close()
 
         # Nothing the upstream says may hand the secret back to the agent.
-        resp_body = redact_bytes(resp_body, [secret])
+        # An upstream that ignores the identity request and compresses
+        # anyway gets decoded before redaction; a body in an encoding
+        # the proxy cannot decode cannot be checked, so it is refused
+        # rather than relayed uninspected.
+        encoding = next(
+            (v for k, v in resp_headers if k.lower() == "content-encoding"),
+            None,
+        )
+        decoded = _decode_body(resp_body, encoding)
+        if decoded is None:
+            self._refuse(502, "uninspectable_response", route.name,
+                         "upstream replied with a Content-Encoding the proxy "
+                         "cannot decode, so the body cannot be checked for "
+                         "leaked credentials")
+            return
+        resp_body = redact_bytes(decoded, [secret])
         self.send_response(status)
         for key, value in resp_headers:
             lk = key.lower()
             if lk in HOP_BY_HOP or lk == "content-length":
                 continue
+            if encoding is not None and lk == "content-encoding":
+                continue  # the body goes back decoded (identity)
             self.send_header(key, redact_text(value, [secret]))
         self.send_header("Content-Length", str(len(resp_body)))
         self.end_headers()
